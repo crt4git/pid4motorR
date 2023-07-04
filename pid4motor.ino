@@ -11,7 +11,7 @@
 #define Kd 2000  // 震荡
 
 volatile long int encodeCount = 0; // 电机编码数，判断位置、方向
-unsigned int aimPosition = 0; // 调试目的值
+unsigned int aimPosition=378; // 调试目的值
 char incomingByte; // 串口位解析
 int motorPwmValue = 255; // 最后控制输出的PID值
 int chosenPositionNum=1;
@@ -61,7 +61,6 @@ void motorForward(int power) {
     analogWrite(motorA, power);
     digitalWrite(motorB, LOW);
   }
-
   else {
     digitalWrite(motorA, LOW);
     digitalWrite(motorB, LOW);
@@ -81,25 +80,25 @@ void motorReserve(int power) {
 void choosePosition(int chosenPosition){
   switch(chosenPosition){
     case 1:
-      aimPosition=0;
+      aimPosition=378;
       break;
     case 2:
-      aimPosition=63;
+      aimPosition=315;
       break;
     case 3:
-      aimPosition=126;
+      aimPosition=252;
       break;
     case 4:
       aimPosition=189;
       break;
     case 5:
-      aimPosition=252;
+      aimPosition=126;
       break;
     case 6:
-      aimPosition=315;
+      aimPosition=63;
       break;
     default:
-      aimPosition=0;
+      aimPosition=378;
   }
 }
 
