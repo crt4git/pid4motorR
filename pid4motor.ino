@@ -6,15 +6,23 @@
 #define motorA 9
 #define motorB 10
 /*电机引脚*/
+#define A0_pin 23;//编码0
+#define A1_pin 24;//编码1
+#define A2_pin 5;//编码2
+/*霍尔传感器*/
+
 #define Kp 260 // 瞬态响应
 #define Ki 2.0  // 稳态误差、精准度
 #define Kd 2000  // 震荡
-
+        
 volatile long int encodeCount = 0; // 电机编码数，判断位置、方向
-unsigned int aimPosition=378; // 调试目的值
+unsigned int aimPosition=315; // 调试目的值
 char incomingByte; // 串口位解析
 int motorPwmValue = 255; // 最后控制输出的PID值
 int chosenPositionNum=1;
+int initValue=0;
+bool initialized=false;
+
 
 PIDController pidcontroller;
 
@@ -26,10 +34,12 @@ void setup() {
   pinMode(motorB, OUTPUT); 
 
   attachInterrupt(digitalPinToInterrupt(encodeA), encoder, RISING);
-//  attachInterrupt(1, getCurrentPosition, RISING);
+  attachInterrupt(1, getCurrentPosition, RISING);
   pidcontroller.begin(); // 初始化PID控制器
   pidcontroller.tune(Kp , Ki , Kd); //设置参数
   pidcontroller.limit(-255, 255); //设置PID输出范围
+
+//  motorInit();
 }
 
 void loop() {
@@ -37,11 +47,9 @@ void loop() {
     chosenPositionNum = Serial.parseInt(); // 目标按键
     choosePosition(chosenPositionNum);
     Serial.read(); // 读取换位符
-    pidcontroller.setpoint(aimPosition); // 目标值
   }
-  motorPwmValue = pidcontroller.compute(encodeCount);  //PID计算所需的值
-  Serial.print(motorPwmValue); // PWN值
-  Serial.print("   ");
+  pidcontroller.setpoint(aimPosition); // 目标值
+  motorPwmValue = pidcontroller.compute(encodeCount); //PID计算所需的值
   if (motorPwmValue > 0) //逆时针
     motorReserve(motorPwmValue);
   else // 顺时针
@@ -66,7 +74,6 @@ void motorForward(int power) {
     digitalWrite(motorB, LOW);
   }
 }
-
 void motorReserve(int power) {
   if (power > 50) {
     analogWrite(motorB, power);
@@ -80,28 +87,34 @@ void motorReserve(int power) {
 void choosePosition(int chosenPosition){
   switch(chosenPosition){
     case 1:
-      aimPosition=378;
+      aimPosition=initValue+378;
       break;
     case 2:
-      aimPosition=315;
+      aimPosition=initValue+315;
       break;
     case 3:
-      aimPosition=252;
+      aimPosition=initValue+252;
       break;
     case 4:
-      aimPosition=189;
+      aimPosition=initValue+189;
       break;
     case 5:
-      aimPosition=126;
+      aimPosition=initValue+126;
       break;
     case 6:
-      aimPosition=63;
+      aimPosition=initValue+63;
       break;
     default:
-      aimPosition=378;
+      aimPosition=initValue+378;
   }
 }
-
 void getCurrentPosition(){
+  if(initialized==false){
+    aimPosition=encodeCount;
+    initValue=encodeCount;
+    initialized=true;
+  }
+}
+void motorInit(){
   
 }
