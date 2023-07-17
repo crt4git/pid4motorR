@@ -1,8 +1,7 @@
-#include <PIDController.h>
-
+/*读取两相编码*/
 #define encodeA 2 
 #define encodeB 3
-/*读取两相编码*/
+
 #define motorA 11
 #define motorB 10
 /*电机引脚*/
@@ -14,19 +13,26 @@
 #define Kp 260 // 瞬态响应
 #define Ki 2.0  // 稳态误差、精准度
 #define Kd 2000  // 震荡
+#define minOut -255
+#define maxOut 255
         
 volatile long int encodeCount = 0; // 电机编码数，判断位置、方向
 unsigned int aimPosition=315; // 调试目的值
 char incomingByte; // 串口位解析
 int motorPwmValue = 255; // 最后控制输出的PID值
+double lastTime=0;
+double errSum=0;
+double lastErr=0;
+int divisor=10;
+double output=0;
 int chosenPositionNum=1;
 int initValue=0;
 bool initialized=false;
 
 
-PIDController pidcontroller;
+//PIDController pidcontroller;
 
-void setup() {
+void setup(){
   Serial.begin(9600); 
   pinMode(encodeA, INPUT); 
   pinMode(encodeB, INPUT); 
@@ -35,9 +41,9 @@ void setup() {
 
   attachInterrupt(digitalPinToInterrupt(encodeA), encoder, RISING);
 //  attachInterrupt(1, getCurrentPosition, RISING);
-  pidcontroller.begin(); // 初始化PID控制器
-  pidcontroller.tune(Kp , Ki , Kd); //设置参数
-  pidcontroller.limit(-255, 255); //设置PID输出范围
+//  pidcontroller.begin(); // 初始化PID控制器
+//  pidcontroller.tune(Kp , Ki , Kd); //设置参数
+//  pidcontroller.limit(-255, 255); //设置PID输出范围
 
 //  motorInit();
 }
@@ -51,8 +57,9 @@ void loop() {
     choosePosition(chosenPositionNum);
     Serial.read(); // 读取换位符
   }
-  pidcontroller.setpoint(aimPosition); // 目标值
-  motorPwmValue = pidcontroller.compute(encodeCount); //PID计算所需的值
+//  pidcontroller.setpoint(aimPosition); // 目标值
+//  motorPwmValue = pidcontroller.compute(encodeCount); //PID计算所需的值
+  motorPwmValue = PIDController(aimPosition, encodeCount);
   if (motorPwmValue > 0) //顺时针
     motorReserve(motorPwmValue);
   else //逆时针
@@ -120,4 +127,22 @@ void getCurrentPosition(){
 }
 void motorInit(){
   
+}
+
+double PIDController(double aimPoint, double nowPoint){
+  //计算时间差
+  unsigned long now=millis();
+  double timeChange=(double)(now-lastTime);
+  //计算误差
+  double error=aimPoint-nowPoint; //误差
+  errSum+=error*timeChange; //累积误差
+  errSum=constrain(errSum, minOut*1.1, maxOut*1.1); 
+  double dErr=(error-lastErr)/timeChange; //误差变化率
+  //输出
+  double newOutput=(Kp*error+Ki*errSum+Kd*dErr)/divisor;
+  output=constrain(newOutput, minOut, maxOut);//限制输出
+//  output=newOutput;//无限制输出
+  lastErr=error;
+  lastTime=now;
+  return output;
 }
