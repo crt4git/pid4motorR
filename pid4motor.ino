@@ -29,43 +29,44 @@
 #define LED3Pin 19
 #define LED4Pin 18
 #define LED5Pin 17
-/*通信相关*/
-#define baudrate 115200  //定义通讯波特率
-#define slaveID 1  //定义modbus RTU从站站号
-#define modbusDataSize 255  //定义modbus数据库空间大小,可根据实际情况自行修改大小
-#define bufferSize 255  //一帧数据的最大字节数量
+
 
 /*电机运动参数*/ 
 volatile long int nowPosition = 0; // 电机编码数，判断位置、方向
-unsigned int aimPosition=315; // 调试目的值
-char incomingByte; // 串口位解析
+unsigned int aimPosition=360; // 调试目的值
 int channelNum=1;
-int initValue=0;
-int speedLimit=255;
+bool startToGo=false;
+int reachCount=0;
+bool arrived=false;
 /*位置控制相关*/
 int buttons[6] = {button0Pin, button1Pin, button2Pin, button3Pin, button4Pin, button5Pin};
 int LEDs[6] = {LED0Pin, LED1Pin, LED2Pin, LED3Pin, LED4Pin, LED5Pin};
 /*PID控制参数*/
 int motorPwmValue = 255; // 最后控制输出的PID值
+double error=0;
 double lastTime=0;
 double errSum=0;
 double lastErr=0;
 double output=0;
 /*通信相关参数*/
+#define baudrate 115200  //定义通讯波特率
+#define slaveID 2  //定义modbus RTU从站站号
+#define modbusDataSize 255  //定义modbus数据库空间大小,可根据实际情况自行修改大小
+#define bufferSize 255  //一帧数据的最大字节数量
 unsigned char frame[bufferSize];  //
 unsigned char frame_red[bufferSize];  //
 HardwareSerial* ModbusPort;
 int RS485_EN_PIN=4;//操作面板也底板RS485控制口
 int delay485_time=1000;//800us,通信延时释放总线时间，下位机
-int VALVE_data_IN[4];
 byte PageRead[12]; //保存内存数据
 unsigned int modbusData[modbusDataSize]={};   //建立modbus数据库
 
 void setup(){
-  Serial.begin(115200); 
-  pinMode(encodeA, INPUT); 
-  pinMode(encodeB, INPUT); 
-  pinMode(motorA, OUTPUT); 
+  
+  Serial.begin(115200);
+  pinMode(encodeA, INPUT);
+  pinMode(encodeB, INPUT);
+  pinMode(motorA, OUTPUT);
   pinMode(motorB, OUTPUT); 
   for(int i=0; i<6; i++){
     pinMode(buttons[i], INPUT); 
@@ -81,24 +82,25 @@ void setup(){
 }
 
 void loop() {
-//  hulTest();
-  modbusRTU_slave();
-  chooseChannel(channelNum);
-  for(int i=0; i<6; i++){
-    if(digitalRead(buttons[i])==0){
-      channelNum = i+1; // 目标按键
-      chooseChannel(channelNum);
-      PORTC &= 0x00;
-      digitalWrite(LEDs[i], HIGH);
-    }
-  }
+    chooseChannel(channelNum);
+    motorWork(nowPosition, aimPosition, 255);
+    modbusRTU_slave();
+    
+//物理按键调试
+//  for(int i=0; i<6; i++){
+//    if(digitalRead(buttons[i])==0){
+//      channelNum = i+1; // 目标按键
+//      chooseChannel(channelNum);
+//      PORTC &= 0x00;
+//      digitalWrite(LEDs[i], HIGH);
+//    }
+//  }
 // 串口调试
 //  while (Serial.available() > 0) {
 //    channelNum = Serial.parseInt(); // 目标按键
 //    chooseChannel(channelNum);
 //    Serial.read(); // 读取换位符
 //  }
-  motorWork(nowPosition, aimPosition, 150);
 }
 
 /*电机相关函数*/
@@ -109,35 +111,46 @@ void ISR_encoder(){
   else 
     nowPosition--; 
 }
-//2、电机pid运动
+
+/*电机运动*/
 void motorWork(double nowPoint, double aimPoint, int maxPWM){
-  delay(1);
+  if(startToGo){
+    while(digitalRead(optoElecPin)==0){
+      analogWrite(motorA, 255);
+      digitalWrite(motorB, LOW);
+    }
+    startToGo=false;
+  }
+  if(!arrived){
+    delay(1); //缓冲时间，更新太快电机没反应
   /*PID控制*/
-  unsigned long now=millis();
-  double timeChange=(double)(now-lastTime);
-  //计算误差
-  double error=aimPoint-nowPoint; //误差
-  errSum+=error*timeChange; //累积误差
-  errSum=constrain(errSum, maxPWM*(-1.1), maxPWM*1.1); 
-  double dErr=(error-lastErr)/timeChange; //误差变化率
-  //输出
-  double newOutput=(Kp*error+Ki*errSum+Kd*dErr)/divisor;
-  output=constrain(newOutput, maxPWM*(-1), maxPWM);//限制输出
-  //  output=newOutput;//无限制输出
-
-  /*信号到电机正反转*/
-  lastErr=error;
-  lastTime=now;
-  if (output > 0) //顺时针
-    motorReserve(output);
-  else //逆时针
-    motorForward(abs(output));  
-
+    unsigned long now=millis();
+    double timeChange=(double)(now-lastTime);
+    //计算误差
+    error=aimPoint-nowPoint; //误差
+    errSum+=error*timeChange; //累积误差
+    errSum=constrain(errSum, maxPWM*(-1.1), maxPWM*1.1); 
+    double dErr=(error-lastErr)/timeChange; //误差变化率
+    //输出
+    double newOutput=(Kp*error+Ki*errSum+Kd*dErr)/divisor;
+    output=constrain(newOutput, maxPWM*(-1), maxPWM);
+    lastErr=error;
+    lastTime=now;
+    /*信号到电机正反转*/
+    if (output > 0) //顺时针
+      motorReserve(output);
+    else //逆时针
+      motorForward(abs(output));  
+  }
+  else{
+    digitalWrite(motorA, LOW);
+    digitalWrite(motorB, LOW);
+  }
 }
-//3、电机正反转
-void motorForward(int power) {
-  if (power > 50) {
-    analogWrite(motorA, power);
+
+void motorForward(int inputPwmValue) {
+  if (inputPwmValue > 0) {
+    analogWrite(motorA, inputPwmValue);
     digitalWrite(motorB, LOW);
   }
   else {
@@ -146,7 +159,7 @@ void motorForward(int power) {
   }
 }
 void motorReserve(int inputPwmValue) {
-  if (inputPwmValue > 50) {
+  if (inputPwmValue > 0) {
     analogWrite(motorB, inputPwmValue);
     digitalWrite(motorA, LOW);
   }
@@ -155,9 +168,30 @@ void motorReserve(int inputPwmValue) {
     digitalWrite(motorB, LOW);
   }
 }
-//4、选择电机通道
-void chooseChannel(int chosenPosition){
-  switch(chosenPosition){
+
+/*电机通道选择*/
+void chooseChannel(int chosenChannelNum){
+
+  //led灯指示是否到位
+  if(abs(error)<3){
+    if(++reachCount>1000){
+      reachCount=1000; 
+      arrived=true;
+      PORTC |= 0x11;
+    }
+  }else{
+    reachCount=0;
+    PORTC &= 0x00;
+  }
+//   if(reachCount>1000){
+//      reachCount=1000; 
+//      currentChannel=channelNum;
+//      arrived=true;
+//      PORTC |= 0x11;
+//   }else{
+//      PORTC &= 0x00;
+//   }
+  switch(chosenChannelNum){
     case 1:
       aimPosition=0;
       break;
@@ -182,78 +216,67 @@ void chooseChannel(int chosenPosition){
 }
 //5、电机位置初始化
 void motorInit(){
+  analogWrite(motorA, 150);
+  digitalWrite(motorB, LOW);
   while(1){
     if(digitalRead(optoElecPin)==0){
-      getPosition();
-      nowPosition=aimPosition;
+      nowPosition=0;//设置起点
+      aimPosition=nowPosition;
+      digitalWrite(motorA, LOW);
+      digitalWrite(motorB, LOW);
       break;
     }
-    motorWork(nowPosition, aimPosition, 100);
+  }
+  while(1){
+    motorWork(nowPosition, aimPosition, 255);
+      if(digitalRead(optoElecPin)==0){
+        reachCount++;
+        digitalWrite(LEDs[0],HIGH); 
+      }else{
+        reachCount=0;
+        digitalWrite(LEDs[0],LOW); 
+     }
+     if(reachCount>1000){
+        reachCount=1000;
+        getPosition();
+        break;
+     }
   }
 }
-
-/*霍尔传感器相关*/
 void getPosition(){
-  if(digitalRead(A0Pin)==1 && digitalRead(A1Pin)==1 &&digitalRead(A2Pin)==0){
+  if(digitalRead(A0Pin)==1 && digitalRead(A1Pin)==0 &&digitalRead(A2Pin)==0){
     channelNum=1;
+    nowPosition=0;
   }
-  else if(digitalRead(A0Pin)==1 && digitalRead(A1Pin)==0 &&digitalRead(A2Pin)==1){
+  else if(digitalRead(A0Pin)==0 && digitalRead(A1Pin)==0 &&digitalRead(A2Pin)==1){
     channelNum=2;
+    nowPosition=63;
   }
-  else if(digitalRead(A0Pin)==0 && digitalRead(A1Pin)==1 &&digitalRead(A2Pin)==1){
+  else if(digitalRead(A0Pin)==1 && digitalRead(A1Pin)==1 &&digitalRead(A2Pin)==0){
     channelNum=3;
-  }
-  else if(digitalRead(A0Pin)==0 && digitalRead(A1Pin)==1 &&digitalRead(A2Pin)==0){
-    channelNum=4;
-  }
-  if(digitalRead(A0Pin)==1 && digitalRead(A1Pin)==0 &&digitalRead(A2Pin)==0){
-    channelNum=5;
-  }
-  else if(digitalRead(A0Pin)==0 && digitalRead(A1Pin)==0 &&digitalRead(A2Pin)==1){
-    channelNum=6;
-  }
-  chooseChannel(channelNum);
-}
-
-/*霍尔传感器相关*/
-void hulTest(){
-  int currentHul=0;
-  if(digitalRead(A0Pin)==1 && digitalRead(A1Pin)==1 &&digitalRead(A2Pin)==0){
-    currentHul=0;
+    nowPosition=126;
   }
   else if(digitalRead(A0Pin)==1 && digitalRead(A1Pin)==0 &&digitalRead(A2Pin)==1){
-    currentHul=1;
+    channelNum=4;
+    nowPosition=189;
   }
   else if(digitalRead(A0Pin)==0 && digitalRead(A1Pin)==1 &&digitalRead(A2Pin)==1){
-    currentHul=2;
+    channelNum=5;
+    nowPosition=252;
   }
   else if(digitalRead(A0Pin)==0 && digitalRead(A1Pin)==1 &&digitalRead(A2Pin)==0){
-    currentHul=3;
-  }
-  if(digitalRead(A0Pin)==1 && digitalRead(A1Pin)==0 &&digitalRead(A2Pin)==0){
-    currentHul=4;
-  }
-  else if(digitalRead(A0Pin)==0 && digitalRead(A1Pin)==0 &&digitalRead(A2Pin)==1){
-    currentHul=5;
-  }
-  for(int i=0; i<6; i++){
-    if(currentHul==i){
-      PORTC &= 0x00;
-      digitalWrite(LEDs[i], HIGH);
-    }
+    channelNum=6;
+    nowPosition=315;
   }
 }
+/*485通信相关*/
 
-
-/*通信相关*/
 void modbusRTU_INI(HardwareSerial *SerialPort)
 {
   ModbusPort = SerialPort;
   (*ModbusPort).begin(baudrate);
   (*ModbusPort).flush();  
 }
-//modbus RTU从站函数
-//支持功能码03,06,16
 void modbusRTU_slave()
 {
   unsigned int characterTime; //字符时间
@@ -308,25 +331,25 @@ void modbusRTU_slave()
               errorFlag=0x02;  //数据超过范围
               responseError(slaveID,function,errorFlag);  //返回错误消息
             }
-          }          
-          //写入指令
-          else if(function == 1)  //修改通道PWM值,0-1为比例阀值0-4096，3为PMT，2为频闪灯
+          }
+          else if(function == 1)  
           {
-            channelNum=frame_red[2];
-            unsigned int startData=((frame_red[4] << 8) | frame_red[5]);  //写入modbus数据库的地址 
-            VALVE_data_IN[channelNum]=startData;             
+            channelNum=frame_red[2];         
             frame[0]=slaveID;  //设定站号
             frame[1]=function;  //设定功能码
-            frame[2] = channelNum ;  //填写数据库地址
-            frame[3] = 0x00;            
-            frame[4] = 0x00;  //填写校验位;  //填写数据库数值
-            frame[5] = 0x00;            
+            frame[2]=channelNum ;  //填写数据库地址
+            frame[3]=0x00;            
+            frame[4]=0x00; 
+            frame[5]=0x00;            
             crc16 = calculateCRC(&frame[0],6);  //计算校验值
             frame[6] = crc16 >> 8;  //填写校验位
             frame[7] = crc16 & 0xFF;
             PORTD|=0x10;
-            (*ModbusPort).write(&frame[0],2);  //返回功能码06的消息 
-            //delayMicroseconds(delay485_time);
+            (*ModbusPort).write(&frame[0],8);  //返回功能码06的消息
+            arrived=false;
+            startToGo=true;
+            reachCount=0;
+            delayMicroseconds(characterTime); 
             PORTD&=~0x10;
           }                                                                              
           else  //其他功能码
